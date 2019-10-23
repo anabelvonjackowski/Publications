@@ -1,0 +1,458 @@
+# Analysis of 16S amplicons 
+
+# Based on a script adpated from the OSD 16S pipeline (https://colab.mpi-bremen.de/micro-b3/svn/analysis-scripts/trunk/osd-analysis/osd-pre-processing/16S/lgc/primer-clipping/02primer-clipping.sh author: Antonio Fernandez-Guerra) by Christiane Hassenrueck at the MPI Bremen. Swarming and (some of) the classification (additional credits: Chris Quast, Josephine Rapp, Pier Buttigieg) differs from the OSD pipeline.
+# reads generated on a MiSeq, 2x300bp
+# customized for sequencing at CeBiTec in Bielefeld (Halina Tegetmeyer)
+# input seqeunces do NOT contain barcode and adapter sequences anymore, but still contain primer sequences
+# to avoid weird line endings (^M) work exclusively on linux when preparing and creating files (or make sure you convert to Linux line endings)
+# workflow optimzed for parallelization on aphros (PBS) at the AWI
+# more R scripts can be found at www.github.com/chassenr/NGS in the AMPLICON and Plotting directory
+
+#######################################
+#
+# Preliminaries...
+#
+#######################################
+
+# Directories...
+# This workflow is started in the directory ${FILELOCATION} which contains all raw sequence (fastq) files.
+# Any change of directory later on in the workflow is inlcuded in the script
+
+# set variables, program and script locations
+FILELOCATION="/scratch2/ajackows/..." #starting directory, location of raw sequence files
+NSAMPLE="100" #number of samples
+SINA_PT="/scratch2/db/SILVA/SSURef_NR99_128_SILVA_07_09_16_opt.arb" #database used for taxonomic classification
+SINA_PT="/scratch2/db/SILVA/SILVA_132_SSURef_NR99_13_12_17_opt.arb" #new as of 2018
+
+# scripts
+# change the location of the scripts to your copy of the aphros repository
+CLIP_qsub="/scratch2/mmolari/aphros/ampliconNGS/clipping_aphros.sh"
+
+TRIM_qsub="/scratch2/mmolari/aphros/ampliconNGS/trimming_aphros.sh" #4:10
+#OOORRR
+TRIM_qsub="/scratch2/mmolari/aphros/ampliconNGS/trimming_aphros_4:15.sh" #4:15
+
+MERGE_qsub="/scratch2/mmolari/aphros/ampliconNGS/merging_aphros.sh"
+FASTQC_qsub="/scratch2/mmolari/aphros/ampliconNGS/fastqc_aphros.sh"
+REFORMAT_qsub="/scratch2/mmolari/aphros/ampliconNGS/reformat_aphros.sh"
+DEREPLICATE_qsub="/scratch2/mmolari/aphros/ampliconNGS/dereplicate_aphros.sh"
+AMPLICONTAB="/scratch2/mmolari/aphros/ampliconNGS/amplicon_contingency_table.py" #also provided with swarm
+SWARM_qsub="/scratch2/mmolari/aphros/ampliconNGS/swarming_aphros.sh"
+MED_qsub="/scratch2/mmolari/aphros/ampliconNGS/med_aphros.sh"
+REMOVE_SINGLE="/scratch2/mmolari/aphros/ampliconNGS/remove_singletons.R"
+SINA_qsub="/scratch2/mmolari/aphros/TaxClassification/sina_aphros.sh" #this script is located in aphros/TaxClassification
+CHECK_LCA="/scratch2/mmolari/aphros/ampliconNGS/find_missing_lca.py"
+
+#modified scripts for longer inserts
+TRIM_qsub="/scratch2/mmolari/aphros/ampliconNGS/trimming_long_aphros.sh"
+TRIM_qsub="/scratch2/mmolari/aphros/ampliconNGS/trimming_long_Arch_aphros_Q12.sh"
+MERGE_qsub="/scratch2/mmolari/aphros/ampliconNGS/merging_long_aphros.sh"
+
+
+#modules
+module load anaconda2 pear fastqc java bbmap swarm asplit R sina
+
+#######################################
+#
+# General steps...
+#
+#######################################
+
+#step 0: shorten file names, rename to running number
+#step 1: primer clipping (cutadapt, parameters from OSD workflow)
+#step 2: quality trimming (trimmomatic) - for long reads recommended after merging: per base quality might improve throughout merging progress
+#step 3: merging (PEAR)
+#step 4: quality trimming and control (trimmomatic, fastqc)
+#step 5: otu clustering using swarm
+#step 6: taxonomic classification of seed sequences
+#step 7: further analysis (R)
+#Alternative to 5 and 6: oligotyping using Maxiximum Entropy Decomposition (MED: http://merenlab.org/software/med/)
+
+
+######################################
+#
+# Analysis pipeline
+#
+######################################
+
+###step 0: shorten file names, rename to running number
+
+# moving original files to separate directory
+#mkdir Original
+#mv *.fastq ./Original/
+
+# creating directory for renamed files
+mkdir Renamed
+
+# save original file names
+ls -1v ./Original/*R1_001.fastq > ./Renamed/originalR1
+ls -1v ./Original/*R2_001.fastq > ./Renamed/originalR2
+
+# copy original files to new file names
+new=1
+for i in $(ls -1v ./Original/*R1_001.fastq)
+do
+  cp ${i} ./Renamed/${new}"_R1.fastq"
+  ((new++))
+done
+
+new=1
+for i in $(ls -1v ./Original/*R2_001.fastq)
+do
+  cp ${i} ./Renamed/${new}"_R2.fastq"
+  ((new++))
+done
+
+# check that the renaming was done correctly
+ls -1v ./Renamed/[0-9]*_R1.fastq > ./Renamed/renamedR1
+ls -1v ./Renamed/[0-9]*_R2.fastq > ./Renamed/renamedR2
+
+paste ./Renamed/originalR1 ./Renamed/renamedR1 > ./Renamed/fileID_R1
+paste ./Renamed/originalR2 ./Renamed/renamedR2 > ./Renamed/fileID_R2
+
+#the following commands schould not give any output
+while read line ; do
+  diff $(echo "$line")
+done < ./Renamed/fileID_R1
+
+while read line ; do
+  diff $(echo "$line")
+done < ./Renamed/fileID_R2
+
+# create directory for qsub output files
+mkdir Logfiles
+
+###step 1: primer clipping 
+# (adapted from https://colab.mpi-bremen.de/micro-b3/svn/analysis-scripts/trunk/osd-analysis/osd-pre-processing/16S/lgc/primer-clipping/02primer-clipping.sh)
+
+# for each sample the following commands will remove the primer sequence when found (or discard the read)
+# it will search both R1 and R2 for both the forward and the reverse primer sequence and
+# if the insert is inverted, it will turn the sequences in the right orientation to make life easier downstream...
+
+#EITHER 1:
+
+# Input your primer sequences, use ^ to anchor to the beginning of line
+# standard bacterial primer V3-V4 SEDIMENT
+FBC=CCTACGGGNGGCWGCAG # forward primer 341F
+RBC=GACTACHVGGGTATCTAATCC # reverse primer 785R
+
+OFWD=16 # length of forward primer (17) - 1
+OREV=20 # length of reverse primer (21) - 1
+
+#OR 2:
+
+# universal primer V4-V5 (Fuhrman Lab) Watercolumn
+#Keep eukaryotic in R script
+FBC=GTGYCAGCMGCCGCGGTAA # forward primer 515F
+RBC=CCGYCAATTYMTTTRAGTTT # reverse primer 926R
+
+OFWD=18 # length of forward primer (19) - 1
+OREV=19 # length of reverse primer (20) - 1
+
+#OR 3:
+#archaeal primer V3-V5 SEDIMENT
+FBC=GYGCASCAGKCGMGAAW # forward primer ARCH349
+RBC=GTGCTCCCCCGCCAATTCCT # reverse primer ARCH915
+
+OFWD=16 # length of forward primer (17) - 1
+OREV=19 # length of reverse primer (20) - 1
+
+
+# Set the proportion of mismatches allowed when matching the primer sequences
+ERROR=0.16
+
+# create directory for output of primer clipping
+mkdir Clipped
+
+# primer clipping
+qsub -d ${FILELOCATION} -t 1-${NSAMPLE} -o ${FILELOCATION}/Logfiles -e ${FILELOCATION}/Logfiles -v FBC=${FBC},RBC=${RBC},OFWD=${OFWD},OREV=${OREV},ERROR=${ERROR} ${CLIP_qsub}
+
+# cleaning up directories
+mkdir ./Clipped/Clipped_logs
+mv ./Clipped/*.log ./Clipped/Clipped_logs/
+mv ./Clipped/*.info ./Clipped/Clipped_logs/
+
+
+###step 2: quality trimming 
+# for long inserts (450ish and onwards) recommended after merging 
+# (you need all the bases you can get, additionally two identical bases with low quality which are merged will generally have a higher quality score.
+# shorter inserts have more overlap and can afford some loss)
+# for the standard bacterial illumina insert we can do it before merging
+
+# ptrim = identical sequence headers with R1 and R2
+# strim = single output, complementary reads removed
+# SLIDINGWINDOW:4:10 (or 6:12) is the absolute minimum! 4:15 recommended
+# argument order matters! MINLEN should come after trimming.
+
+# for each sample, trim the clipped reads with a sliding window of 4 and a quality threshold of 15
+# Discard reads less than 100 bps.
+
+# creating directory for output of quality trimming
+mkdir Trimmed
+
+qsub -d ${FILELOCATION} -t 1-${NSAMPLE} -o ${FILELOCATION}/Logfiles -e ${FILELOCATION}/Logfiles ${TRIM_qsub}
+
+# cleaning up directories
+mkdir ./Trimmed/Trimmed_logs
+mv ./Trimmed/*.log ./Trimmed/Trimmed_logs
+
+
+###step 3: read merging (CHECK RESOURCES!!!)
+# this will merge reads with a minimum overlap of 10 (-v)
+# the minimum length of the merged reads is 350 (-n)
+# for short insert sizes it might be recommented to set a maximum length for the merged reads (here -m 500). 
+# Freakishly long reads generally indicate an error...
+
+# j: threads
+# v: overlap
+# n: min insert length
+# m: max insert length
+# o: output just needs basename, other stuff is added by PEAR
+# no trimming (q) enabled as trimmomatic did the work here.
+
+#creating directory for output of merging
+mkdir Merged
+
+qsub -d ${FILELOCATION} -t 1-${NSAMPLE} -o ${FILELOCATION}/Logfiles -e ${FILELOCATION}/Logfiles ${MERGE_qsub}
+
+# cleaning up directories
+mkdir ./Merged/Merged_logs
+mv ./Merged/*.log ./Merged/Merged_logs
+
+
+###step 4: quality control with FASTQC
+
+# create directory for fastqc output
+mkdir FastQC
+
+qsub -d ${FILELOCATION} -t 1-${NSAMPLE} -o ${FILELOCATION}/Logfiles -e ${FILELOCATION}/Logfiles ${FASTQC_qsub}
+
+########## this bug has been fixed in the fastqc version on aphros ###############
+# Some of the quality scoring done by FASTQC results in inappropriate WARN/FAIL statuses:
+# summary stats other than the mean are set to 0, probably due to a lack of sequence representation. 
+# Thus the following code will parse through the fastqc output re-assign PASS/WARN/FAIL statuses
+# based on per base sequence quality...
+
+# for i in $(seq 1 ${NSAMPLE})
+# do
+
+  # pull out the section of the fastqc output
+#   awk '/^>>Per base sequence quality/,/^>>END_MODULE/' ./FastQC/$i".assembled_fastqc"/fastqc_data.txt | grep "^[0-9]"> ./FastQC/$i".assembled_fastqc"/fastqc_PBSQ.txt
+
+  # check if the number of bins with a median quality value (column 3, $3 in awk) not equal to zero is equal
+  # to the number of bins with a median qual of at least 15 and a 10th percentile (column 6, $6 in awk) of at
+  # least quality 5.
+  # if that's true, check if the quality has a median qual of 25 and 10th perc of at least 10 - assign PASS
+  # else WARN 
+  # else FAIL
+  # Based on these results, modify the per base seq qual (row 2) of the summary.txt file and capture
+  # the results in a new summary file: summary1.txt.
+
+#   if [ $(awk '$3!=0' ./FastQC/$i".assembled_fastqc"/fastqc_PBSQ.txt | wc -l) -eq $(awk '$3>=15 && $6>=5' ./FastQC/$i".assembled_fastqc"/fastqc_PBSQ.txt| wc -l) ];
+#   then
+#     if [ $(awk '$3!=0' ./FastQC/$i".assembled_fastqc"/fastqc_PBSQ.txt | wc -l) -eq $(awk '$3>=25 && $6>=10' ./FastQC/$i".assembled_fastqc"/fastqc_PBSQ.txt | wc -l) ];
+#     then
+#       awk '{if(NR==2)$1="PASS\t"; print $0}' ./FastQC/$i".assembled_fastqc"/summary.txt > ./FastQC/$i".assembled_fastqc"/summary1.txt 
+#     else
+#       awk '{if(NR==2)$1="WARN\t"; print $0}' ./FastQC/$i".assembled_fastqc"/summary.txt > ./FastQC/$i".assembled_fastqc"/summary1.txt 
+#     fi
+#   else
+#     awk '{if(NR==2)$1="FAIL\t"; print $0}' ./FastQC/$i".assembled_fastqc"/summary.txt > ./FastQC/$i".assembled_fastqc"/summary1.txt 
+#   fi
+
+# done
+
+# output some diagnostic files
+# combine flags of 'Per base sequence quality' module for all files
+grep "Per base sequence quality" ./FastQC/[0-9]*.assembled_fastqc/summary.txt > ./FastQC/QC_summary.txt
+
+# range of read lengths
+grep "Sequence length" ./FastQC/[0-9]*.assembled_fastqc/fastqc_data.txt > ./FastQC/QC_read_length.txt
+
+# combine flags of 'Sequence Length Distribution' module for all files including most abundant read lengths
+for i in $(seq 1 ${NSAMPLE})
+do
+  awk '/^>>Sequence Length Distribution/,/^>>END_MODULE/' ./FastQC/$i".assembled_fastqc"/fastqc_data.txt |\
+  sed -e '1,2d' -e '$d' > ./FastQC/$i".assembled_fastqc"/fastqc_SLD.txt
+
+  sort -t$'\t' -k2nr ./FastQC/$i".assembled_fastqc"/fastqc_SLD.txt |\
+  head -1 |\
+  paste <(grep "Sequence Length Distribution" ./FastQC/$i".assembled_fastqc"/summary.txt) - 
+done > ./FastQC/QC_read_distribution.txt
+
+# count sequences
+# only counting forward read as representative for PE
+##BACTERIA
+grep -c '^@M' ./Renamed/[0-9]*_R1.fastq > nSeqs_raw_V3V4_all.txt
+grep -c '^@M' ./Clipped/[0-9]*_clip_R1.fastq >> nSeqs_clip_V3V4_all.txt
+grep -c '^@M' ./Trimmed/[0-9]*_ptrim_R1.fastq >> nSeqs_trim_V3V4_all.txt
+grep -c '^@M' ./Merged/[0-9]*.assembled.fastq >> nSeqs_merge_V3V4_all.txt
+#grep -c '^@M' ./Merged/[0-9]*.assembled_raw.fastq >> nSeqs_all.txt #for long inserts
+
+#put all the numbers in one table
+paste nSeqs_raw_V3V4_all.txt nSeqs_clip_V3V4_all.txt nSeqs_trim_V3V4_all.txt nSeqs_merge_V3V4_all.txt > nSeqs_V3V4_all.txt
+
+##ARCHAEA
+grep -c '^@M' ./Renamed/[0-9]*_R1.fastq > nSeqs_raw_V4V5_all.txt
+grep -c '^@M' ./Clipped/[0-9]*_clip_R1.fastq >> nSeqs_clip_V4V5_all.txt
+grep -c '^@M' ./Trimmed/[0-9]*_ptrim_R1.fastq >> nSeqs_trim_V4V5_all.txt
+grep -c '^@M' ./Merged/[0-9]*.assembled.fastq >> nSeqs_merge_V4V5_all.txt
+#grep -c '^@M' ./Merged/[0-9]*.assembled_raw.fastq >> nSeqs_all.txt #for long inserts
+
+#ARCHAEA
+grep -c '^@M' ./Merged/[0-9]*.assembled_raw.fastq >> nSeqs_merge_V3V5_all.txt
+grep -c '^@M' ./Merged/[0-9]*.assembled.fastq >> nSeqs_trimmed_V3V5_all.txt
+paste nSeqs_raw_V3V5_all.txt nSeqs_clip_V4V5_all.txt nSeqs_trim_V4V5_all.txt nSeqs_merge_V4V5_all.txt > nSeqs_V4V5_all.txt
+
+#put all the numbers in one table
+paste nSeqs_raw_V3V5_all.txt nSeqs_clip_V3V5_all.txt nSeqs_trimmed_V3V5_all.txt nSeqs_merge_V3V5_all.txt > nSeqs_V3V5_all.txt
+
+###step 5: swarm OTU clustering (https://github.com/torognes/swarm)
+
+# create directory for swarm input and output
+mkdir Swarm
+
+# extract fasta file from fastq and move to new directory
+# requires at least jre1.8
+# set fastawrap to 1000 to prevent line breaks within sequence
+
+qsub -d ${FILELOCATION} -t 1-${NSAMPLE} -o ${FILELOCATION}/Logfiles -e ${FILELOCATION}/Logfiles ${REFORMAT_qsub}
+
+# Now to dereplicate and rename individual reads to save compute and mental anguish downstream...
+# The dereplication code is courtesy of the Swarm developers and can be found here:
+# https://github.com/torognes/swarm/wiki/Working-with-several-samples
+
+qsub -d ${FILELOCATION} -t 1-${NSAMPLE} -o ${FILELOCATION}/Logfiles -e ${FILELOCATION}/Logfiles ${DEREPLICATE_qsub}
+
+# study level dereplication 
+
+cd ./Swarm/
+
+export LC_ALL=C
+cat *_dereplicated.fasta | \
+awk 'BEGIN {RS = ">" ; FS = "[_\n]"}
+     {if (NR != 1) {abundances[$1] += $2 ; sequences[$1] = $3}}
+     END {for (amplicon in sequences) {
+         print ">" amplicon "_" abundances[amplicon] "_" sequences[amplicon]}}' | \
+sort --temporary-directory=$(pwd) -t "_" -k2,2nr -k1.2,1d | \
+sed -e 's/\_/\n/2' > all_samples.fasta
+
+#building amplicon contingency table (use script from swarm 1.20)
+#the python script supplied with the latest versions of swarm may not work properly
+
+python ${AMPLICONTAB} *_dereplicated.fasta > amplicons_table.csv
+
+#swarming
+# -b light swarms have less than 3 reads associated with them
+# -d 1: local edit distance threshold is 1 
+# fastidious algorithm (-f): light swarms (amplicon abundance less than 3) will be grafted to heavy swarms
+# -t set threads to 4
+# -l output a log file
+# -o the swarm file itself
+# -s output a stats file (needed downstream)
+# -w output fasta file with seed sequences
+
+qsub -d ${FILELOCATION}/Swarm -o ${FILELOCATION}/Logfiles -e ${FILELOCATION}/Logfiles ${SWARM_qsub}
+
+# building OTU contingency table for multiple samples 
+# https://github.com/torognes/swarm/wiki/Working-with-several-samples
+
+# let the script know where the good stuff is...
+STATS="amplicons_stats.txt"
+SWARMS="amplicons.swarms"
+AMPLICON_TABLE="amplicons_table.csv"
+OTU_TABLE="OTU_contingency_table.csv"
+
+# Header
+echo -e "OTU\t$(head -n 1 "${AMPLICON_TABLE}")" > "${OTU_TABLE}"
+
+# Compute "per sample abundance" for each OTU
+awk -v SWARM="${SWARMS}" -v TABLE="${AMPLICON_TABLE}"  'BEGIN {FS = " "
+            while ((getline < SWARM) > 0) {
+                swarms[$1] = $0
+            }
+            FS = "\t"
+            while ((getline < TABLE) > 0) {
+                table[$1] = $0
+            }
+           }
+     {# Parse the stat file (OTUs sorted by decreasing abundance)
+      seed = $3 "_" $4
+      n = split(swarms[seed], OTU, "[ _]")
+      for (i = 1; i < n; i = i + 2) {
+          s = split(table[OTU[i]], abundances, "\t")
+          for (j = 1; j < s; j++) {
+              samples[j] += abundances[j+1]
+          }
+      }
+      printf "%s\t%s", NR, $3
+      for (j = 1; j < s; j++) {
+          printf "\t%s", samples[j]
+      }
+     printf "\n"
+     delete samples
+     }' "${STATS}" >> "${OTU_TABLE}"
+
+# You may want to check if large swarms are taxonomically consistent
+# by classifying more than their seed sequences.
+
+
+###step 6: taxonomic classification
+
+# At this stage, you could consider removing very rare swarms (less than one or two reads per swarm).
+# As a large chunk of the swarms are rare (and will probably be removed from analysis later), you can save compute time here
+# As always, whether this is advisable or not depends on your question.
+
+# convert lowercase sequences to uppercase sequences in amplicons_seeds.fasta
+awk '{print /^>/ ? $0 : toupper($0)}' amplicons_seeds.fasta > amplicons_seeds_uc.fasta
+
+# removal of singletons
+# this will output the accession numbers of all non-singleton swarms 
+# and a table with the precentage of retained sequences per sample if singleton swarms are removed
+Rscript ${REMOVE_SINGLE} 
+# rename the original amplicons_seeds_uc.fasta so that it is not overwritten
+mv amplicons_seeds_uc.fasta amplicons_seeds_uc_all.fasta
+# select only the representative sequences of non-singleton swarms 
+grep -A1 -F -f heavy.accnos amplicons_seeds_uc_all.fasta | sed '/^--$/d' > amplicons_seeds_uc.fasta
+
+cd ..
+
+# splitting seed sequence fasta file for parallel processing
+mkdir Sina
+cd Sina
+asplit '^>' 2000 < ../Swarm/amplicons_seeds_uc.fasta #split fasta file in fasta files with 2000 sequences each
+
+# Determine how many chunks there are...
+JOBCOUNT=$(ls -1 out* | wc -l) #specify the number of files in array job
+
+qsub -d ${FILELOCATION}/Sina -t 1-${JOBCOUNT} -o ${FILELOCATION}/Logfiles -e ${FILELOCATION}/Logfiles -v SINA_PT=${SINA_PT} ${SINA_qsub}
+
+# check that all sequences were classified
+# no output is good, otherwise the sequence number per 2000-sequence package is printed to standard output
+for file in ${FILELOCATION}/Logfiles/sina.e*
+do 
+  ${CHECK_LCA} $file
+done
+
+# Time to gather up the useful info from the split output... 
+# In grep, -h suppresses printing of filenames for results
+
+# Get all the swarm seed hashes (sort of like accessions)
+grep -h '^sequence_identifier' $(ls -1v ${FILELOCATION}/Logfiles/sina.e*) | sed 's/^sequence_identifier: //' > amplicons_seeds.accnos
+
+#check if the order is the same as in amplicons_seeds_uc.fasta
+grep '^>' ../Swarm/amplicons_seeds_uc.fasta | sed 's/^>//' | diff - amplicons_seeds.accnos
+
+# Get all corresponding taxonomic paths (note the same order as the accnos)
+grep -h '^lca_tax_slv' $(ls -1v ${FILELOCATION}/Logfiles/sina.e*) | sed 's/^lca_tax_slv: //' > amplicons_seeds.tax_slv
+
+# Get all alignment qualities (for filtering later)
+grep -h '^align_quality_slv' $(ls -1v ${FILELOCATION}/Logfiles/sina.e*) | sed 's/^align_quality_slv: //' > amplicons_seeds.align_quality_slv
+
+# merge these output files...
+paste amplicons_seeds.accnos amplicons_seeds.align_quality_slv amplicons_seeds.tax_slv > amplicons_seeds_taxonomy.txt 
+cd ..
+
+# copy final output files to working directory
+cp ./Swarm/OTU_contingency_table.csv ./
+cp ./Sina/amplicons_seeds_taxonomy.txt ./

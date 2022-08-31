@@ -1,0 +1,22 @@
+﻿Parameters,Summer,Fall,Enrichment,Seasonal Enrichment
+POC (umolL-1),18.07,5.25,0.3,3.4
+DOC (umol L-1),73.52,71.65,1,1
+DCCHO_umol,0.82,0.33,0.4,2.5
+Neutral DCCHO_umol,749.05,287.55,0.4,2.6
+Neutral DCCHO%DOC,5.87,2.33,0.4,2.5
+Amino DCCHO_umol,31.44,29.22,0.9,1.1
+Amino DCCHO%DOC,0.26,0.24,1,1
+Acidic DCCHO_umol,24.56,4.39,0.2,5.6
+Acidic DCCHO%DOC,1.54,0.67,0.4,2.3
+Essential DHAA_umol,189.94,90.59,0.5,2.1
+Essential DHAA%DOC,1.02,0.7,0.7,1.5
+Non-Essential DHAA_umol,189.94,90.59,0.5,2.1
+Non-Essential DHAA%DOC,1.16,0.47,0.4,2.5
+PP (umol C L-1 d-1),2.44,0.81,0.3,3
+Phytoplankton (cells ml-1),10712.2,22053.25,2.1,-2.1
+Picoplankton_cellsml,4508.17,2322.38,0.5,1.9
+Picoplankton%POC,1.11,1.32,1.2,-1.2
+Synecoccus_cellsml,428.85,14596.56,34,-34
+Synecoccus%POC,0.04,5.08,116.6,-116.6
+BP (umol C L-1 d-1),0.05,0.01,0.2,4.7
+Bacteria (cells ml-1),9.94E+05,6.37E+05,0.6,1.6

@@ -10,6 +10,7 @@ Data:
 * Sequence data have been deposited in the European Nucleotide Archive (ENA) at EMBL-EBI under accession number PRJEB43926, 
 using the data brokerage service of the German Federation for Biological Data (GFBio; Diepenbroek et al., 2014) in 
 compliance with MIxS standards (Yilmaz et al., 2011).
+* Biogeochemical Data from von Jackowski et al., 2020: **Organic matter and bacteria measurements of POLARSTERN cruise PS114 and Maria S. Merian cruise MSM77**. See https://doi.org/10.1594/PANGAEA.915751
 
 Author:
 Anabel von Jackowski (anabelvonjackowski@gmail.com)

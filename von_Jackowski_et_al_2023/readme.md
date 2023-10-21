@@ -1,11 +1,12 @@
 This GitHub Repository contains code included in:
 
-A. von Jackowski, Alba Filella, Mark J. Hopwood, Yuanyuan Gu, and Anja Engel (2023). currently submitted to journal
+Anabel von Jackowski, Maren Walter2, Timo Spiegel, Pier Luigi Buttigieg, and Massimiliano Molari (2023). **Drivers of pelagic and benthic microbial communities on Central Arctic seamounts.** _Front. Mar. Sci._ 10:1216442. doi: 10.3389/fmars.2023.1216442
 
 Data:
 
-    CTD Data: 
-    Biogeochemical Data:
+    CTD Data: https://doi.pangaea.de/10.1594/PANGAEA.871927
+    Current Data: https://doi.pangaea.de/10.1594/PANGAEA.904373
+    Biogeochemical Data: https://doi.pangaea.de/10.1594/PANGAEA.910048
+    16S rRNA data: https://www.ebi.ac.uk/ena, PRJEB34976
  
-
-Author: Anabel von Jackowski (anabelvonjackowski@gmail.com)
+Correspondence: Anabel von Jackowski (anabelvonjackowski@gmail.com)

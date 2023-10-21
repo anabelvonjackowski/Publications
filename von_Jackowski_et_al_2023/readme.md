@@ -1,6 +1,6 @@
 This GitHub Repository contains code included in:
 
-Anabel von Jackowski, Maren Walter2, Timo Spiegel, Pier Luigi Buttigieg, and Massimiliano Molari (2023). **Drivers of pelagic and benthic microbial communities on Central Arctic seamounts.** _Front. Mar. Sci._ 10:1216442. doi: 10.3389/fmars.2023.1216442
+Anabel von Jackowski, Maren Walter, Timo Spiegel, Pier Luigi Buttigieg, and Massimiliano Molari (2023). **Drivers of pelagic and benthic microbial communities on Central Arctic seamounts.** _Front. Mar. Sci._ 10:1216442. doi: 10.3389/fmars.2023.1216442
 
 Data:
 

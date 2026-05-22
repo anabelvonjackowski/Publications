@@ -6,4 +6,4 @@ PANGAEA: https://doi.pangaea.de/10.1594/PANGAEA.974747
 
 ENA under the accession number [PRJEB77937](https://www.ebi.ac.uk/ena/browser/view/PRJEB77937)
 
-Correspondence: Eva Ortega-­ Retuerta (ortegaretuerta@obs-banyuls.fr)
+Correspondence: Eva Ortega-­Retuerta (ortegaretuerta@obs-banyuls.fr)
